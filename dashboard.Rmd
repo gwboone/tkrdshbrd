@@ -1,0 +1,174 @@
+---
+title: "My Investment Performance"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+---
+<!-- checking for and install (if missing) R packages needed for the dashboard-->
+```{r setup, include=FALSE}
+
+## If a package is installed, it will be loaded. If any 
+## are not, the missing package(s) will be installed 
+## from CRAN and then loaded.
+
+## First specify the packages of interest
+packages = c("flexdashboard", "tidyquant",
+             "dplyr", "readr",
+             "ggplot2","ggthemes",
+             "data.table","DT")
+
+## Now load or install&load all
+package.check <- lapply(
+  packages,
+  FUN = function(x) {
+    if (!require(x, character.only = TRUE)) {
+      install.packages(x, dependencies = TRUE)
+      library(x, character.only = TRUE)
+    }
+  }
+)
+
+# set a clean environment for the work that is about to be done
+rm(packages)
+rm(package.check)
+```
+
+<!-- read a buys.csv file, make sure it matches the field descriptions-->
+```{r}
+#setwd("~/RPROJECTS/stocks")
+options(digits = 2)
+
+MyData <- read_csv("buys.csv") ## A csv containing fields of 
+  #"Description":  Company Name
+  #"Action":  Buy, Sell, user Cash Deposit (not a dividend)
+  #"Symbol": Ticker
+  #"Date": Date of Buy, Sell, Cash Deposit
+  #"Quantity": Number of shares purchased
+  #"Currency" Currency of purchase
+  #"BuyPrice" Share purchase price
+```
+
+```{r}
+
+buys <- filter(MyData,Action == "BUY") # A vector of share purchases
+contributions <- filter(MyData,Action == "DEPOSIT") #A vector of cash deposits made to trading account (aka YOUR invested amounts)
+tkrs <- unique(buys$Symbol) # A vector of tickers from buys.csv file
+time_from <- Sys.Date()-7 #"2020-05-15" Date to pull last 7 days of stock data in returns_daily
+
+returns_daily <- tkrs %>%
+  tq_get(get = "stock.prices",
+         from = time_from)
+
+most_recent_returns <- returns_daily %>%
+  group_by(symbol) %>%
+  filter(date == max(date)) %>% # selecting the most recent record from the 7 days of data returned
+  select(symbol, date, adjusted) %>%
+  arrange(symbol) %>%
+  rename(Symbol = symbol)
+
+MyPrtfl <- merge(x=buys,y=most_recent_returns,by="Symbol") # combine buys and most recent_returns vectors by 'Symbol'
+
+ MyPrtfl <- MyPrtfl %>%
+   mutate(CstBss = BuyPrice*Quantity) %>% # dollars spent to purchase stocks
+   mutate(MktVal = (adjusted*Quantity)) %>% # use adjusted price for assessing market value
+   mutate(MktRtn = ((MktVal-(BuyPrice*Quantity))/(BuyPrice*Quantity)*100)) %>% # are we up or down from purchase price
+   mutate(PtflVal = sum(MktVal)) # what is the portion of portfolio the stock makes
+```
+
+```{r}
+#   
+ MyDashBoard <- MyPrtfl %>%
+ group_by(Symbol) %>%
+   summarise(CstBasis = sum(CstBss),
+             MktVal = sum(MktVal),
+             Rtrn = mean(MktRtn)
+             ) %>%
+   mutate(PtflVal = sum(MktVal)) %>%
+   mutate(Invstd = sum(CstBasis))%>%
+  mutate(PrcntPtfl = MktVal/PtflVal*100)
+ 
+MyInvestment <- sum(contributions$BuyPrice)
+MyValue <- as.numeric(MyDashBoard[1,5])
+MyReturn <- MyValue-MyInvestment
+MyROI <- (MyValue-MyInvestment)/MyInvestment*100
+MyDataTable <- as.data.table(MyData)
+
+```
+
+Column {data-width=750}
+-----------------------------------------------------------------------
+
+### Stock Return
+
+```{r}
+MyPlot<- MyDashBoard %>% 
+  mutate(Color = ifelse(Rtrn > 0, "olivedrab3", "tomato3"))
+
+ggplot(MyPlot, aes(x = Symbol, y = Rtrn, label = round(Rtrn))) + 
+   geom_col(fill = MyPlot$Color) +
+  theme_clean() +
+theme(text = element_text(size=15),
+    axis.text.x = element_text(angle = 90)) +
+   scale_color_identity() +
+  geom_text(size = 3, position = position_stack(vjust = 0.5)) +
+  labs(x = "Ticker", y = "Percent Return") +
+  ggtitle("Adjusted Returns",
+          subtitle = paste0("As Of Close ",format(max(most_recent_returns$date),"%B %d %Y"))) 
+
+#np_graph %>% mutate(Color = ifelse(C1 > 0, "green", "red")) %>%
+ # ggplot(aes(x = C1, y= C2, color = Color))+
+  #geom_point()+
+  #scale_color_identity()
+
+
+
+
+```
+```{r}
+MyDashBoard %>%
+  select(!c(PtflVal, Invstd, Rtrn)) %>%
+                  DT::datatable( 
+                              rownames= FALSE,
+                              #extensions = 'Buttons', 
+                              width = "100%",
+                              options = list(searching = F,
+                                             pageLength = 7,
+                                             scrollX = TRUE#,
+                                             #dom = 'ts',
+                                             #autoWidth = F
+                                             #rownames = F
+                                             #buttons = c('csv', 'excel', 'pdf')
+                                                                                )) %>%
+              formatRound(columns=c('PrcntPtfl'), digits=1) %>%
+              formatCurrency(columns = c('CstBasis', 'MktVal'), currency = '$', digits = 0)
+```
+Column {data-width=250}
+-----------------------------------------------------------------------
+
+### Invested
+
+```{r}
+valueBox(format(MyInvestment, digits = 2, big.mark = ",", big.interval = 3), caption = "Invested", color = "SteelBlue", icon = "fas fa-donate")
+
+```
+
+
+### Market Value
+
+
+```{r}
+
+valueBox(format(MyValue,digits = 2, big.mark = ",", big.interval = 3), caption = "Market Return", color = "SteelBlue", icon = "fas fa-hand-holding-usd")
+```
+
+
+### ROI
+```{r}
+valueBox(format(MyROI,digits = 2), caption = "Market ROI", color = "SteelBlue", icon = "fas fa-percent")
+```
+
+### Profit
+```{r}
+valueBox(format(MyReturn,digits = 2, big.mark = ",", big.interval = 3), caption = "Unrealized Profit", color = "SteelBlue", icon = "fas fa-dollar-sign")
+```
